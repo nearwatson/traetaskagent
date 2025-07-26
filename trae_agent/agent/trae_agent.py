@@ -173,12 +173,6 @@ class TraeAgent(Agent):
             os.chdir(pwd)
         return stdout
 
-    # Copyright (c) 2024 paul-gauthier
-    # SPDX-License-Identifier: Apache-2.0
-    # Original remove_patches_to_tests function was released under Apache-2.0 License, with the full license text
-    # available at https://github.com/Aider-AI/aider-swe-bench/blob/6e98cd6c3b2cbcba12976d6ae1b07f847480cb74/LICENSE.txt
-    # Original function is at https://github.com/Aider-AI/aider-swe-bench/blob/6e98cd6c3b2cbcba12976d6ae1b07f847480cb74/tests.py#L45
-
     def remove_patches_to_tests(self, model_patch: str) -> str:
         """
         Remove any changes to the tests directory from the provided patch.
