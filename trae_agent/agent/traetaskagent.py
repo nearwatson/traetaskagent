@@ -253,9 +253,21 @@ class TraeTaskAgent(TraeAgent):
         steps = []
         
         for i, step in enumerate(execution.steps, 1):
+            # Map agent states to frontend-compatible types
+            state_mapping = {
+                "thinking": "thinking",
+                "calling_tool": "tool_calling", 
+                "reflecting": "thinking",
+                "completed": "complete",
+                "error": "error",
+                "idle": "thinking"
+            }
+            
+            step_type = state_mapping.get(step.state.value, step.state.value)
+            
             step_data = {
                 "step": i,
-                "type": "thinking" if step.state.value == "thinking" else step.state.value,
+                "type": step_type,
                 "content": "",
                 "description": f"步骤 {i}: {step.state.value}"
             }
