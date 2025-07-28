@@ -15,7 +15,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from trae_agent.utils.cli_console import CLIConsole
+from .utils.cli_console import CLIConsole
 
 from .agent import TraeAgent
 from .utils.config import Config, load_config

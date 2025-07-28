@@ -4,6 +4,7 @@
 """Base Agent class for LLM-based agents."""
 
 from abc import ABC, abstractmethod
+import json
 
 from ..tools.base import Tool, ToolCall, ToolExecutor, ToolResult
 from ..tools.ckg.ckg_database import clear_older_ckg
@@ -13,7 +14,7 @@ from ..utils.llm_basics import LLMMessage, LLMResponse
 from ..utils.llm_client import LLMClient
 from ..utils.trajectory_recorder import TrajectoryRecorder
 from .agent_basics import AgentExecution, AgentState, AgentStep
-
+from logger import logger
 
 class Agent(ABC):
     """Base class for LLM-based agents."""
@@ -159,6 +160,7 @@ class Agent(ABC):
                     llm_response = self._llm_client.chat(
                         messages, self._model_parameters, self._tools
                     )
+                    logger.info(f"LLM Response: {llm_response}")
                     step.llm_response = llm_response
 
                     # Display step with LLM response
@@ -314,6 +316,7 @@ class Agent(ABC):
         step.tool_calls = tool_calls
         self._update_cli_console(step)
 
+        logger.info(f"tool calls: {json.dumps([(tool.name, tool.arguments) for tool in tool_calls], indent=4, ensure_ascii=False)}")
         if self.model_parameters.parallel_tool_calls:
             tool_results = await self._tool_caller.parallel_tool_call(tool_calls)
         else:

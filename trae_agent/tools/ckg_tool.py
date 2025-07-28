@@ -4,7 +4,7 @@
 from pathlib import Path
 from typing import override
 
-from trae_agent.tools.run import MAX_RESPONSE_LEN
+from .run import MAX_RESPONSE_LEN
 
 from .base import Tool, ToolCallArguments, ToolExecResult, ToolParameter
 from .ckg.ckg_database import CKGDatabase

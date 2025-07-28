@@ -1,7 +1,7 @@
 import re
 from dataclasses import dataclass
 
-from trae_agent.agent.agent_basics import AgentStep
+from ..agent.agent_basics import AgentStep
 
 from .config import Config, ModelParameters
 from .llm_basics import LLMMessage
