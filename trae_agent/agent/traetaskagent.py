@@ -431,16 +431,25 @@ class TraeTaskAgent(TraeAgent):
         step.tool_results = tool_results
         self._update_cli_console(step)
         
-        # 发送工具执行结果更新
+        # 发送工具执行完成更新，包含完整的工具调用和结果信息
         await self._send_step_update({
             "step": step_number,
             "type": "tool_result",
             "content": f"工具执行完成，共 {len(tool_results)} 个结果",
-            "description": f"步骤 {step_number}: 工具执行结果",
+            "description": f"步骤 {step_number}: 工具执行完成",
+            # 保留工具调用信息以便前端同时显示参数和结果
+            "tool_calls": [
+                {
+                    "name": call.name,
+                    "arguments": call.arguments,
+                    "id": getattr(call, 'id', f"call_{step_number}_{i}")
+                }
+                for i, call in enumerate(tool_calls)
+            ],
             "tool_results": [
                 {
                     "name": result.name,
-                    "result": str(result.result)[:500],  # 限制长度避免过长
+                    "result": str(result.result)[:1000] if result.result else "",  # 增加长度限制
                     "success": result.success,
                     "error": result.error
                 }
