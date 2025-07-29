@@ -126,7 +126,19 @@ class TraeTaskAgent(TraeAgent):
             Dict: Structured response compatible with existing web backend
         """
         try:
+            logger.info(f"TraeTaskAgent 开始处理消息: {message[:100]}...")
+            
+            # 存储当前session_id以供中断检查使用
             self.current_session_id = session_id
+            
+            # 从kwargs中提取TraeTaskAgent特定参数
+            project_path = kwargs.get('project_path')
+            file_path = kwargs.get('file_path')
+            working_dir = kwargs.get('working_dir')
+            max_steps = kwargs.get('max_steps', 20)
+            must_patch = kwargs.get('must_patch', False)
+            patch_path = kwargs.get('patch_path')
+            trajectory_file = kwargs.get('trajectory_file')
             
             # Extract optional parameters from message metadata
             message_data = kwargs.get('message_data', {})
@@ -269,6 +281,29 @@ class TraeTaskAgent(TraeAgent):
             step_number = 1
 
             while step_number <= self._max_steps:
+                # 检查中断标志
+                if hasattr(self, 'current_session_id') and self.current_session_id:
+                    interrupt_flag = self.db_manager.get_session_interrupt_flag(self.current_session_id)
+                    if interrupt_flag:
+                        logger.info(f"检测到session {self.current_session_id} 的中断标志，停止任务执行")
+                        
+                        # 清除中断标志
+                        self.db_manager.clear_session_interrupt_flag(self.current_session_id)
+                        
+                        # 发送中断状态更新
+                        await self._send_step_update({
+                            "step": step_number,
+                            "type": "interrupted",
+                            "content": "任务已被用户中断",
+                            "description": f"步骤 {step_number}: 任务执行被用户中断",
+                            "status": "interrupted"
+                        })
+                        
+                        # 设置执行结果为中断状态
+                        execution.final_result = f"Task interrupted by user at step {step_number}"
+                        execution.success = False
+                        break
+
                 step = AgentStep(step_number=step_number, state=AgentState.THINKING)
 
                 try:
@@ -312,8 +347,8 @@ class TraeTaskAgent(TraeAgent):
                             await self._send_step_update({
                                 "step": step_number,
                                 "type": "complete",
-                                "content": "任务已完成",
-                                "description": f"步骤 {step_number}: 任务执行完成",
+                                "content": "任务执行完成",
+                                "description": f"步骤 {step_number}: 任务成功完成",
                                 "status": "completed"
                             })
                             break
@@ -325,24 +360,6 @@ class TraeTaskAgent(TraeAgent):
                     else:
                         # Check if the response contains a tool call
                         tool_calls = llm_response.tool_calls
-                        if tool_calls:
-                            # 发送工具调用状态更新
-                            await self._send_step_update({
-                                "step": step_number,
-                                "type": "tool_calling",
-                                "content": f"正在调用 {len(tool_calls)} 个工具...",
-                                "description": f"步骤 {step_number}: 工具调用中",
-                                "tool_calls": [
-                                    {
-                                        "name": call.name,
-                                        "arguments": call.arguments,
-                                        "id": getattr(call, 'id', f"call_{step_number}")
-                                    }
-                                    for call in tool_calls
-                                ],
-                                "status": "in_progress"
-                            })
-                        
                         messages = await self._tool_call_handler_with_feedback(tool_calls, step, step_number)
 
                     # Record agent step
