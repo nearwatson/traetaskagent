@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+from dotenv import load_dotenv
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -15,53 +16,27 @@ from .agent_basics import AgentExecution
 
 from logger import logger
 
+def load_env():
+    # project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../../../'))
+    project_root = Path(__file__).parent.parent.parent.parent.parent.parent
+    # project_root = Path("/home/xusheng/Studio/fund_mmp/backend/agents/traeag/trae_agent/agent/traetaskagent.py").parent.parent.parent.parent.parent.parent
+    dotenv_path = os.path.join(project_root, '.env')
+    load_dotenv(dotenv_path)
+
 class TraeTaskAgent(TraeAgent):
     """TraeTaskAgent - TraeAgent adapted for web backend integration."""
 
     @staticmethod
     def _create_default_trae_config() -> Config:
         """Create default Trae Config."""
-        # Default Trae config structure
-        trae_config_dict = {
-            "default_provider": "openrouter",
-            "max_steps": 32,
-            "enable_lakeview": False,
-            "model_providers": {
-                "openrouter": {
-                "api_key": "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",
-                "base_url": "https://openrouter.ai/api/v1",
-                "model": "anthropic/claude-sonnet-4",
-                "max_tokens": 32768,
-                "temperature": 0.5,
-                "top_p": 1,
-                "top_k": 0,
-                "max_retries": 10,
-                "parallel_tool_calls": False
-                },
-                "anthropic": {
-                    "model": "claude-sonnet-4-20250514",
-                    "api_key": os.getenv("ANTHROPIC_API_KEY", ""),
-                    "base_url": "https://api.anthropic.com",
-                    "max_tokens": 4096,
-                    "temperature": 0.5,
-                    "top_p": 1,
-                    "top_k": 0,
-                    "max_retries": 10,
-                    "parallel_tool_calls": False
-                },
-                "openai": {
-                    "model": "gpt-4o",
-                    "api_key": os.getenv("OPENAI_API_KEY", ""),
-                    "base_url": "https://api.openai.com/v1",
-                    "max_tokens": 4096,
-                    "temperature": 0.5,
-                    "top_p": 1,
-                    "max_retries": 10,
-                    "parallel_tool_calls": False
-                }
-            }
-        }
-        
+        load_env()
+        config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'trae_config.json')
+        with open(config_path, 'r') as f:
+            trae_config_dict = json.load(f)
+        for provider, prov_config in trae_config_dict['model_providers'].items():
+            key_name = provider.upper() + '_API_KEY'
+            if 'api_key' in prov_config:
+                prov_config['api_key'] = os.getenv(key_name, prov_config['api_key'])
         return Config(trae_config_dict)
 
     def __init__(self, servers, llm_client, config, db_manager):
