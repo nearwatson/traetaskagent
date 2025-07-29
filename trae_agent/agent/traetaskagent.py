@@ -18,29 +18,9 @@ from logger import logger
 class TraeTaskAgent(TraeAgent):
     """TraeTaskAgent - TraeAgent adapted for web backend integration."""
 
-    def __init__(self, servers, llm_client, config, db_manager):
-        """
-        Initialize TraeTaskAgent for web backend integration.
-        
-        Args:
-            servers: MCP servers list (compatibility with existing agents)
-            llm_client: LLM client instance
-            config: Configuration object (compatible with existing agent config)
-            db_manager: Database manager instance
-        """
-        # Create Trae Config from existing config
-        self.web_config = config
-        self.db_manager = db_manager
-        self.servers = servers
-        self.web_llm_client = llm_client
-        self.current_session_id = None
-        
-        # Initialize Trae Agent with converted config
-        trae_config = self._create_trae_config()
-        super().__init__(config=trae_config)
-        
-    def _create_trae_config(self) -> Config:
-        """Create Trae Config from web config."""
+    @staticmethod
+    def _create_default_trae_config() -> Config:
+        """Create default Trae Config."""
         # Default Trae config structure
         trae_config_dict = {
             "default_provider": "openrouter",
@@ -83,6 +63,36 @@ class TraeTaskAgent(TraeAgent):
         }
         
         return Config(trae_config_dict)
+
+    def __init__(self, servers, llm_client, config, db_manager):
+        """Initialize TraeTaskAgent with server management."""
+        # TraeTaskAgent 总是使用自己的专用配置
+        # 因为外部的 config 和 llm_client 可能不兼容 TraeAgent 的接口需求
+        trae_config = self._create_default_trae_config()
+        
+        # 调用父类初始化，使用专用配置和 llm_client=None
+        super().__init__(trae_config, llm_client=None)
+        
+        # 设置实例变量
+        self.servers = servers
+        self.db_manager = db_manager
+        self.current_session_id = None
+        
+        # 新增：WebSocket连接和实时反馈相关
+        self.websocket_manager = None
+        self.websocket_connection = None
+        self.step_callback = None
+        
+        # 导入必需模块
+        import tempfile
+        os = __import__('os')
+        
+        # 创建 temp dir
+        self.temp_dir = tempfile.mkdtemp(prefix="trae_agent_")
+        
+        # Initialize trajectory recording
+        self.trajectory_path = None
+
     
     async def initialize(self):
         """Initialize the agent."""
@@ -93,6 +103,34 @@ class TraeTaskAgent(TraeAgent):
         """Cleanup resources."""
         # TraeAgent doesn't have servers to cleanup
         pass
+    
+    def set_websocket_callback(self, websocket_manager, websocket_connection, session_id: str):
+        """设置WebSocket连接和回调，用于实时反馈"""
+        self.websocket_manager = websocket_manager
+        self.websocket_connection = websocket_connection
+        self.current_session_id = session_id
+    
+    async def _send_step_update(self, step_data: dict):
+        """发送步骤更新到前端"""
+        if self.websocket_manager and self.websocket_connection:
+            try:
+                import json
+                from datetime import datetime
+                
+                # 构造实时步骤更新消息
+                update_message = {
+                    "type": "step_update",
+                    "session_id": self.current_session_id,
+                    "step_data": step_data,
+                    "timestamp": datetime.now().isoformat()
+                }
+                
+                await self.websocket_manager.send_personal_message(
+                    json.dumps(update_message, ensure_ascii=False), 
+                    self.websocket_connection
+                )
+            except Exception as e:
+                print(f"发送步骤更新失败: {e}")
     
     async def process_message(self, message: str, session_id: str, **kwargs) -> Dict:
         """
@@ -179,8 +217,8 @@ class TraeTaskAgent(TraeAgent):
                 # Create new task
                 self.new_task(task, task_args)
                 
-                # Execute task
-                execution: AgentExecution = await self.execute_task()
+                # Execute task with real-time feedback
+                execution: AgentExecution = await self.execute_task_with_realtime_feedback()
                 
                 # Convert execution result to web backend format
                 response = self._convert_execution_to_web_response(execution, trajectory_path, task_args)
@@ -212,7 +250,218 @@ class TraeTaskAgent(TraeAgent):
                 "trajectory_file": trajectory_file,
                 "error_detail": error_detail
             }
+    
+    async def execute_task_with_realtime_feedback(self) -> "AgentExecution":
+        """Execute task with real-time step feedback to frontend."""
+        import time
+        from .agent_basics import AgentExecution, AgentStep, AgentState
+        from ..utils.llm_basics import LLMMessage
+        
+        start_time = time.time()
+        execution = AgentExecution(task=self._task, steps=[])
+        
+        try:
+            messages = self._initial_messages
+            step_number = 1
 
+            while step_number <= self._max_steps:
+                step = AgentStep(step_number=step_number, state=AgentState.THINKING)
+
+                try:
+                    # 发送"思考中"状态更新
+                    await self._send_step_update({
+                        "step": step_number,
+                        "type": "thinking",
+                        "content": f"步骤 {step_number}: 正在思考...",
+                        "description": f"步骤 {step_number}: AI正在分析和思考",
+                        "status": "in_progress"
+                    })
+
+                    step.state = AgentState.THINKING
+                    self._update_cli_console(step)
+
+                    # Get LLM response
+                    llm_response = self._llm_client.chat(
+                        messages, self._model_parameters, self._tools
+                    )
+                    step.llm_response = llm_response
+
+                    # 发送LLM响应更新
+                    await self._send_step_update({
+                        "step": step_number,
+                        "type": "thinking",
+                        "content": llm_response.content,
+                        "description": f"步骤 {step_number}: AI思考完成",
+                        "status": "completed"
+                    })
+
+                    self._update_cli_console(step)
+                    self._update_llm_usage(llm_response, execution)
+
+                    if self.llm_indicates_task_completed(llm_response):
+                        if self._is_task_completed(llm_response):
+                            self._llm_complete_response_task_handler(
+                                llm_response, step, execution, messages
+                            )
+                            
+                            # 发送完成状态更新
+                            await self._send_step_update({
+                                "step": step_number,
+                                "type": "complete",
+                                "content": "任务已完成",
+                                "description": f"步骤 {step_number}: 任务执行完成",
+                                "status": "completed"
+                            })
+                            break
+                        else:
+                            step.state = AgentState.THINKING
+                            messages = [
+                                LLMMessage(role="user", content=self.task_incomplete_message())
+                            ]
+                    else:
+                        # Check if the response contains a tool call
+                        tool_calls = llm_response.tool_calls
+                        if tool_calls:
+                            # 发送工具调用状态更新
+                            await self._send_step_update({
+                                "step": step_number,
+                                "type": "tool_calling",
+                                "content": f"正在调用 {len(tool_calls)} 个工具...",
+                                "description": f"步骤 {step_number}: 工具调用中",
+                                "tool_calls": [
+                                    {
+                                        "name": call.name,
+                                        "arguments": call.arguments,
+                                        "id": getattr(call, 'id', f"call_{step_number}")
+                                    }
+                                    for call in tool_calls
+                                ],
+                                "status": "in_progress"
+                            })
+                        
+                        messages = await self._tool_call_handler_with_feedback(tool_calls, step, step_number)
+
+                    # Record agent step
+                    self._record_handler(step, messages)
+                    self._update_cli_console(step)
+
+                    execution.steps.append(step)
+                    step_number += 1
+
+                except Exception as e:
+                    step.state = AgentState.ERROR
+                    step.error = str(e)
+
+                    # 发送错误状态更新
+                    await self._send_step_update({
+                        "step": step_number,
+                        "type": "error",
+                        "content": f"执行错误: {str(e)}",
+                        "description": f"步骤 {step_number}: 执行出现错误",
+                        "status": "error"
+                    })
+
+                    self._update_cli_console(step)
+                    self._record_handler(step, messages)
+                    
+                    execution.steps.append(step)
+                    break
+
+            if step_number > self._max_steps and not execution.success:
+                execution.final_result = "Task execution exceeded maximum steps without completion."
+                
+                # 发送超时状态更新
+                await self._send_step_update({
+                    "step": step_number,
+                    "type": "failed",
+                    "content": "任务执行超过最大步数限制",
+                    "description": "任务未能在规定步数内完成",
+                    "status": "failed"
+                })
+
+        except Exception as e:
+            execution.final_result = f"Agent execution failed: {str(e)}"
+            
+            # 发送失败状态更新
+            await self._send_step_update({
+                "step": step_number if 'step_number' in locals() else 1,
+                "type": "error",
+                "content": f"代理执行失败: {str(e)}",
+                "description": "系统级错误",
+                "status": "error"
+            })
+
+        execution.execution_time = time.time() - start_time
+
+        # Display final summary
+        if 'step' in locals():
+            self._update_cli_console(step)
+
+        return execution
+    
+    async def _tool_call_handler_with_feedback(self, tool_calls, step, step_number):
+        """带实时反馈的工具调用处理器"""
+        from ..utils.llm_basics import LLMMessage
+        from .agent_basics import AgentState
+        import json
+        
+        messages = []
+        if not tool_calls or len(tool_calls) <= 0:
+            messages = [
+                LLMMessage(
+                    role="user",
+                    content="It seems that you have not completed the task.",
+                )
+            ]
+            return messages
+
+        step.state = AgentState.CALLING_TOOL
+        step.tool_calls = tool_calls
+        self._update_cli_console(step)
+
+        if self._model_parameters.parallel_tool_calls:
+            tool_results = await self._tool_caller.parallel_tool_call(tool_calls)
+        else:
+            tool_results = await self._tool_caller.sequential_tool_call(tool_calls)
+        
+        step.tool_results = tool_results
+        self._update_cli_console(step)
+        
+        # 发送工具执行结果更新
+        await self._send_step_update({
+            "step": step_number,
+            "type": "tool_result",
+            "content": f"工具执行完成，共 {len(tool_results)} 个结果",
+            "description": f"步骤 {step_number}: 工具执行结果",
+            "tool_results": [
+                {
+                    "name": result.name,
+                    "result": str(result.result)[:500],  # 限制长度避免过长
+                    "success": result.success,
+                    "error": result.error
+                }
+                for result in tool_results
+            ],
+            "status": "completed"
+        })
+        
+        for tool_result in tool_results:
+            # Add tool result to conversation
+            message = LLMMessage(role="user", tool_result=tool_result)
+            messages.append(message)
+
+        reflection = self.reflect_on_result(tool_results)
+        if reflection:
+            step.state = AgentState.REFLECTING
+            step.reflection = reflection
+
+            # Display reflection
+            self._update_cli_console(step)
+
+            messages.append(LLMMessage(role="assistant", content=reflection))
+
+        return messages
+    
     def _parse_task_content(self, message: str, metadata: Dict) -> str:
         """Parse task content from message, extracting any embedded parameters."""
         # Look for common task patterns and extract parameters
