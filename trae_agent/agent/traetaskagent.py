@@ -13,6 +13,7 @@ from .trae_agent import TraeAgent
 from ..utils.config import Config, load_config
 from ..utils.llm_basics import LLMMessage
 from .agent_basics import AgentExecution
+from ..tools.mcp_tool import MCPToolFactory
 
 from logger import logger
 
@@ -30,7 +31,8 @@ class TraeTaskAgent(TraeAgent):
     def _create_default_trae_config() -> Config:
         """Create default Trae Config."""
         load_env()
-        config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'trae_config.json')
+        # config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'trae_config.json')
+        config_path = "/home/xusheng/Studio/fund_mmp/backend/agents/traeag/trae_config.json"
         with open(config_path, 'r') as f:
             trae_config_dict = json.load(f)
         for provider, prov_config in trae_config_dict['model_providers'].items():
@@ -58,6 +60,10 @@ class TraeTaskAgent(TraeAgent):
         self.websocket_connection = None
         self.step_callback = None
         
+        # MCP 工具相关
+        self.mcp_tools = []
+        self.server_clients = {}  # 存储 MCP 服务器客户端实例
+        
         # 导入必需模块
         import tempfile
         os = __import__('os')
@@ -70,14 +76,14 @@ class TraeTaskAgent(TraeAgent):
 
     
     async def initialize(self):
-        """Initialize the agent."""
-        # TraeAgent doesn't need explicit initialization like MCP agents
-        pass
+        """Initialize the agent and MCP servers."""
+        # Initialize MCP servers if available
+        await self._initialize_mcp_servers()
     
     async def cleanup_servers(self):
         """Cleanup resources."""
-        # TraeAgent doesn't have servers to cleanup
-        pass
+        # Cleanup MCP servers
+        await self._cleanup_mcp_servers()
     
     def set_websocket_callback(self, websocket_manager, websocket_connection, session_id: str):
         """设置WebSocket连接和回调，用于实时反馈"""
@@ -147,9 +153,32 @@ class TraeTaskAgent(TraeAgent):
             
             # Setup trajectory recording with temp directory
             if trajectory_file:
+                # 如果trajectory_file不是绝对路径，需要特殊处理
                 if not os.path.isabs(trajectory_file):
-                    # Create in temp directory if relative path
-                    trajectory_file = os.path.join(tempfile.gettempdir(), "trae_trajectories", trajectory_file)
+                    # 检查是否只是一个目录名（不包含文件扩展名）
+                    if not trajectory_file.endswith('.json'):
+                        # 如果只是目录名，在该目录下创建一个唯一的json文件
+                        trajectory_dir = os.path.join(working_dir, trajectory_file)
+                        os.makedirs(trajectory_dir, exist_ok=True)
+                        trajectory_filename = f"trajectory_{session_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+                        trajectory_file = os.path.join(trajectory_dir, trajectory_filename)
+                    else:
+                        # 如果是文件名，放在working_dir下
+                        trajectory_file = os.path.join(working_dir, trajectory_file)
+                # 如果是绝对路径，直接使用，但要确保是json文件
+                elif not trajectory_file.endswith('.json'):
+                    # 如果是绝对路径但指向目录，在该目录下创建文件
+                    if os.path.isdir(trajectory_file):
+                        trajectory_filename = f"trajectory_{session_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+                        trajectory_file = os.path.join(trajectory_file, trajectory_filename)
+                    else:
+                        # 如果是绝对路径但不是json文件，添加扩展名
+                        trajectory_file += f"_{session_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+                
+                # 确保目录存在
+                trajectory_dir = os.path.dirname(trajectory_file)
+                os.makedirs(trajectory_dir, exist_ok=True)
+                
                 trajectory_path = self.setup_trajectory_recording(trajectory_file)
             else:
                 # Generate default trajectory file in temp directory
@@ -189,8 +218,8 @@ class TraeTaskAgent(TraeAgent):
                 if max_steps and max_steps != 20:
                     self._max_steps = max_steps
                 
-                # Create new task
-                self.new_task(task, task_args)
+                # Create new task with MCP tools
+                await self.new_task_with_mcp_tools(task, task_args)
                 
                 # Execute task with real-time feedback
                 execution: AgentExecution = await self.execute_task_with_realtime_feedback()
@@ -569,6 +598,148 @@ class TraeTaskAgent(TraeAgent):
             }
         
         return response
+    
+    async def _initialize_mcp_servers(self):
+        """Initialize MCP servers and load tools."""
+        try:
+            # Import ServerClient - 注意这里 servers 可能已经是 ServerClient 实例或配置字典
+            from backend.agents.simple_chatbot.mcp_simple_chatbot.iter_agent import ServerClient
+            
+            # Initialize MCP servers if servers config is available
+            if hasattr(self, 'servers') and self.servers:
+                # 检查 servers 是 ServerClient 实例列表还是配置字典
+                if isinstance(self.servers, list):
+                    # 如果是 ServerClient 实例列表（从 main.py 传入）
+                    for server_client in self.servers:
+                        try:
+                            # 服务器可能已经初始化过了，这里重新初始化确保状态正确
+                            if not hasattr(server_client, 'session') or server_client.session is None:
+                                await server_client.initialize()
+                            
+                            # Store server client
+                            self.server_clients[server_client.name] = server_client
+                            
+                            # Get MCP tools from this server
+                            mcp_tools = await MCPToolFactory.create_mcp_tools_async(
+                                server_client=server_client,
+                                model_provider=self._llm_client.provider.value
+                            )
+                            
+                            # Add to our tool list
+                            self.mcp_tools.extend(mcp_tools)
+                            
+                            logger.info(f"初始化 MCP 服务器成功: {server_client.name}, 加载了 {len(mcp_tools)} 个工具")
+                            
+                        except Exception as e:
+                            logger.error(f"初始化 MCP 服务器失败 {server_client.name}: {e}")
+                            
+                elif isinstance(self.servers, dict):
+                    # 如果是配置字典
+                    for server_name, server_config in self.servers.items():
+                        try:
+                            # Create and initialize server client
+                            server_client = ServerClient(server_name, server_config)
+                            await server_client.initialize()
+                            
+                            # Store server client
+                            self.server_clients[server_name] = server_client
+                            
+                            # Get MCP tools from this server
+                            mcp_tools = await MCPToolFactory.create_mcp_tools_async(
+                                server_client=server_client,
+                                model_provider=self._llm_client.provider.value
+                            )
+                            
+                            # Add to our tool list
+                            self.mcp_tools.extend(mcp_tools)
+                            
+                            logger.info(f"初始化 MCP 服务器成功: {server_name}, 加载了 {len(mcp_tools)} 个工具")
+                            
+                        except Exception as e:
+                            logger.error(f"初始化 MCP 服务器失败 {server_name}: {e}")
+                        
+        except Exception as e:
+            logger.error(f"MCP 服务器初始化过程出错: {e}")
+    
+    async def _cleanup_mcp_servers(self):
+        """Cleanup MCP servers."""
+        for server_name, server_client in self.server_clients.items():
+            try:
+                await server_client.cleanup()
+                logger.info(f"清理 MCP 服务器: {server_name}")
+            except Exception as e:
+                logger.error(f"清理 MCP 服务器失败 {server_name}: {e}")
+        
+        self.server_clients.clear()
+        self.mcp_tools.clear()
+    
+    def get_available_mcp_tools(self) -> List:
+        """Get list of available MCP tools."""
+        return self.mcp_tools
+    
+    async def new_task_with_mcp_tools(self, task: str, extra_args: dict[str, str] | None = None, tool_names: list[str] | None = None):
+        """Create a new task with both TraeAgent tools and MCP tools."""
+        from ..tools import tools_registry
+        from ..tools.base import Tool
+        from ..agent.trae_agent import TraeAgentToolNames
+        
+        self._task: str = task
+
+        if tool_names is None:
+            tool_names = TraeAgentToolNames
+
+        # Get the model provider from the LLM client
+        provider = self._llm_client.provider.value
+        
+        # Create standard TraeAgent tools
+        from ..tools.base import ToolExecutor
+        standard_tools: list[Tool] = [
+            tools_registry[tool_name](model_provider=provider) for tool_name in tool_names
+        ]
+        
+        # Add MCP tools
+        all_tools = standard_tools + self.mcp_tools
+        
+        self._tools: list[Tool] = all_tools
+        self._tool_caller = ToolExecutor(self._tools)
+
+        # Setup initial messages (same as parent class)
+        from ..utils.llm_basics import LLMMessage
+        from .agent_basics import AgentError
+        
+        self._initial_messages: list[LLMMessage] = []
+        self._initial_messages.append(LLMMessage(role="system", content=self.get_system_prompt()))
+
+        user_message = ""
+        if not extra_args:
+            raise AgentError("Project path and issue information are required.")
+        if "project_path" not in extra_args:
+            raise AgentError("Project path is required")
+
+        self.project_path = extra_args.get("project_path", "")
+        user_message += f"[Project root path]:\n{self.project_path}\n\n"
+
+        if "issue" in extra_args:
+            user_message += f"[Problem statement]: We're currently solving the following issue within our repository. Here's the issue text:\n{extra_args['issue']}\n"
+        
+        # Set optional attributes
+        optional_attrs_to_set = ["base_commit", "must_patch", "patch_path"]
+        for attr in optional_attrs_to_set:
+            if attr in extra_args:
+                setattr(self, attr, extra_args[attr])
+
+        self._initial_messages.append(LLMMessage(role="user", content=user_message))
+
+        # If trajectory recorder is set, start recording
+        if self._trajectory_recorder:
+            self._trajectory_recorder.start_recording(
+                task=task,
+                provider=self._llm_client.provider.value,
+                model=self._model_parameters.model,
+                max_steps=self._max_steps,
+            )
+            
+        logger.info(f"任务创建完成，总共加载 {len(all_tools)} 个工具 (标准: {len(standard_tools)}, MCP: {len(self.mcp_tools)})")
     
     async def approve_tools(self, approved_call_ids: List[str], user_id: str) -> Dict:
         """

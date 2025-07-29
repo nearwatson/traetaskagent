@@ -10,6 +10,7 @@ from .bash_tool import BashTool
 from .ckg_tool import CKGTool
 from .edit_tool import TextEditorTool
 from .json_edit_tool import JSONEditTool
+from .mcp_tool import MCPTool, MCPToolFactory
 from .sequential_thinking_tool import SequentialThinkingTool
 from .task_done_tool import TaskDoneTool
 
@@ -21,6 +22,8 @@ __all__ = [
     "BashTool",
     "TextEditorTool",
     "JSONEditTool",
+    "MCPTool",
+    "MCPToolFactory",
     "SequentialThinkingTool",
     "TaskDoneTool",
     "CKGTool",
@@ -33,4 +36,5 @@ tools_registry: dict[str, Type[Tool]] = {
     "sequentialthinking": SequentialThinkingTool,
     "task_done": TaskDoneTool,
     "ckg": CKGTool,
+    # MCP tools are handled dynamically via MCPToolFactory
 }
