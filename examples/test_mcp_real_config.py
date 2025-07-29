@@ -25,7 +25,7 @@ async def test_mcp_tools_with_real_config():
     
     try:
         # 1. 加载配置文件
-        config_path = project_root / "backend/agents/simple_chatbot/mcp_simple_chatbot/servers_config_trae.json"
+        config_path = project_root / "backend/agents/configuration/servers_config_trae.json"
         print(f"📂 加载配置文件: {config_path}")
         
         with open(config_path, 'r', encoding='utf-8') as f:
@@ -197,7 +197,7 @@ def show_config_info():
     """显示配置文件信息"""
     print("=== 配置文件信息预览 ===\n")
     
-    config_path = project_root / "backend/agents/simple_chatbot/mcp_simple_chatbot/servers_config_trae.json"
+    config_path = project_root / "backend/agents/configuration/servers_config_trae.json"
     
     try:
         with open(config_path, 'r', encoding='utf-8') as f:
