@@ -18,9 +18,7 @@ from ..tools.mcp_tool import MCPToolFactory
 from logger import logger
 
 def load_env():
-    # project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../../../'))
     project_root = Path(__file__).parent.parent.parent.parent.parent.parent
-    # project_root = Path("/home/xusheng/Studio/fund_mmp/backend/agents/traeag/trae_agent/agent/traetaskagent.py").parent.parent.parent.parent.parent.parent
     dotenv_path = os.path.join(project_root, '.env')
     load_dotenv(dotenv_path)
 
@@ -31,8 +29,8 @@ class TraeTaskAgent(TraeAgent):
     def _create_default_trae_config() -> Config:
         """Create default Trae Config."""
         load_env()
-        # config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'trae_config.json')
-        config_path = "/home/xusheng/Studio/fund_mmp/backend/agents/traeag/trae_config.json"
+        project_root = Path(__file__).parent.parent.parent.parent.parent.parent
+        config_path = project_root / "backend/agents/traeag/trae_config.json"
         with open(config_path, 'r') as f:
             trae_config_dict = json.load(f)
         for provider, prov_config in trae_config_dict['model_providers'].items():
