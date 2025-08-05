@@ -14,9 +14,9 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent.parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from backend.agents.traeag.trae_agent.agent.traetaskagent import TraeTaskAgent
-from backend.agents.simple_chatbot.mcp_simple_chatbot.iter_agent import ServerClient, Configuration
-from backend.db import MongoDBManager
+from agents.traeag.trae_agent.agent.traetaskagent import TraeTaskAgent
+from agents.simple_chatbot.mcp_simple_chatbot.iter_agent import ServerClient, Configuration
+from db import MongoDBManager
 
 
 async def test_mcp_tools_with_real_config():
@@ -25,7 +25,7 @@ async def test_mcp_tools_with_real_config():
     
     try:
         # 1. 加载配置文件
-        config_path = project_root / "backend/agents/configuration/servers_config_trae.json"
+        config_path =  "agents/configuration/servers_config_trae.json"
         print(f"📂 加载配置文件: {config_path}")
         
         with open(config_path, 'r', encoding='utf-8') as f:
@@ -197,7 +197,7 @@ def show_config_info():
     """显示配置文件信息"""
     print("=== 配置文件信息预览 ===\n")
     
-    config_path = project_root / "backend/agents/configuration/servers_config_trae.json"
+    config_path = "agents/configuration/servers_config_trae.json"
     
     try:
         with open(config_path, 'r', encoding='utf-8') as f:

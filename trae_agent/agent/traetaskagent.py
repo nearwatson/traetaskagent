@@ -18,9 +18,10 @@ from ..tools.mcp_tool import MCPToolFactory
 from logger import logger
 
 def load_env():
-    project_root = Path(__file__).parent.parent.parent.parent.parent.parent
-    dotenv_path = os.path.join(project_root, '.env')
-    load_dotenv(dotenv_path)
+    # project_root = Path(__file__).parent.parent.parent.parent.parent.parent
+    # dotenv_path = os.path.join(project_root, '.env')
+    # load_dotenv(dotenv_path)
+    load_dotenv()
 
 class TraeTaskAgent(TraeAgent):
     """TraeTaskAgent - TraeAgent adapted for web backend integration."""
@@ -29,8 +30,8 @@ class TraeTaskAgent(TraeAgent):
     def _create_default_trae_config() -> Config:
         """Create default Trae Config."""
         load_env()
-        project_root = Path(__file__).parent.parent.parent.parent.parent.parent
-        config_path = project_root / "backend/agents/traeag/trae_config.json"
+        # project_root = Path(__file__).parent.parent.parent.parent.parent.parent
+        config_path = "agents/traeag/trae_config.json"
         with open(config_path, 'r') as f:
             trae_config_dict = json.load(f)
         for provider, prov_config in trae_config_dict['model_providers'].items():
@@ -113,7 +114,7 @@ class TraeTaskAgent(TraeAgent):
     
     async def process_message(self, message: str, session_id: str, **kwargs) -> Dict:
         """
-        Process a message and return structured response compatible with web backend.
+        Process a message and return structured response compatible with web-backend .
         
         Args:
             message: User message
@@ -627,7 +628,7 @@ class TraeTaskAgent(TraeAgent):
         """Initialize MCP servers and load tools."""
         try:
             # Import ServerClient - 注意这里 servers 可能已经是 ServerClient 实例或配置字典
-            from backend.agents.simple_chatbot.mcp_simple_chatbot.iter_agent import ServerClient
+            from agents.simple_chatbot.mcp_simple_chatbot.iter_agent import ServerClient
             
             # Initialize MCP servers if servers config is available
             if hasattr(self, 'servers') and self.servers:
