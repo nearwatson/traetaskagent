@@ -359,7 +359,9 @@ class TraeTaskAgent(TraeAgent):
                     else:
                         # Check if the response contains a tool call
                         tool_calls = llm_response.tool_calls
-                        messages = await self._tool_call_handler_with_feedback(tool_calls, step, step_number)
+                        
+                        # Process the tool calls and get results
+                        messages = await self._tool_call_handler_with_feedback(tool_calls, step, step_number, llm_response)
 
                     # Record agent step
                     self._record_handler(step, messages)
@@ -419,7 +421,7 @@ class TraeTaskAgent(TraeAgent):
 
         return execution
     
-    async def _tool_call_handler_with_feedback(self, tool_calls, step, step_number):
+    async def _tool_call_handler_with_feedback(self, tool_calls, step, step_number, llm_response=None):
         """带实时反馈的工具调用处理器"""
         from ..utils.llm_basics import LLMMessage
         from .agent_basics import AgentState
@@ -434,6 +436,17 @@ class TraeTaskAgent(TraeAgent):
                 )
             ]
             return messages
+        
+        # Add assistant message with tool calls to conversation history first
+        # This ensures proper tool_use -> tool_result pairing for Anthropic models via OpenRouter
+        if tool_calls and llm_response:
+            for tool_call in tool_calls:
+                tool_call_message = LLMMessage(
+                    role="assistant",
+                    content=llm_response.content or "",
+                    tool_call=tool_call
+                )
+                messages.append(tool_call_message)
 
         step.state = AgentState.CALLING_TOOL
         step.tool_calls = tool_calls

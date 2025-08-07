@@ -147,28 +147,15 @@ class OpenRouterClient(BaseLLMClient):
         )
 
         # update message history
-        if llm_response.tool_calls:
-            self.message_history.append(
-                ChatCompletionAssistantMessageParam(
-                    role="assistant",
-                    content=llm_response.content,
-                    tool_calls=[
-                        ChatCompletionMessageToolCallParam(
-                            id=tool_call.call_id,
-                            function=Function(
-                                name=tool_call.name,
-                                arguments=json.dumps(tool_call.arguments),
-                            ),
-                            type="function",
-                        )
-                        for tool_call in llm_response.tool_calls
-                    ],
-                )
-            )
-        elif llm_response.content:
+        # Note: We don't add the assistant message with tool_calls to history here
+        # because the tool execution results will be added by the agent framework,
+        # and we need to maintain proper tool_use -> tool_result pairing for Anthropic models
+        if llm_response.content and not llm_response.tool_calls:
+            # Only add non-tool content to history immediately
             self.message_history.append(
                 ChatCompletionAssistantMessageParam(content=llm_response.content, role="assistant")
             )
+        # Tool calls will be added to history when tool results are processed
 
         if self.trajectory_recorder:
             self.trajectory_recorder.record_llm_interaction(
@@ -216,16 +203,21 @@ class OpenRouterClient(BaseLLMClient):
 
 def _msg_tool_call_handler(messages: list[ChatCompletionMessageParam], msg: LLMMessage) -> None:
     if msg.tool_call:
+        # For OpenRouter with Anthropic models, we need to add the assistant message with tool_calls first
         messages.append(
-            ChatCompletionFunctionMessageParam(
-                content=json.dumps(
-                    {
-                        "name": msg.tool_call.name,
-                        "arguments": msg.tool_call.arguments,
-                    }
-                ),
-                role="function",
-                name=msg.tool_call.name,
+            ChatCompletionAssistantMessageParam(
+                role="assistant",
+                content=msg.content or "",
+                tool_calls=[
+                    ChatCompletionMessageToolCallParam(
+                        id=msg.tool_call.call_id,
+                        function=Function(
+                            name=msg.tool_call.name,
+                            arguments=json.dumps(msg.tool_call.arguments),
+                        ),
+                        type="function",
+                    )
+                ],
             )
         )
 
