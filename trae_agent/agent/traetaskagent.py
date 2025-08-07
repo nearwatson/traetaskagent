@@ -637,6 +637,8 @@ class TraeTaskAgent(TraeAgent):
                     # 如果是 ServerClient 实例列表（从 main.py 传入）
                     for server_client in self.servers:
                         try:
+                            logger.info(f"正在初始化 MCP 服务器: {server_client.name} (类型: {getattr(server_client, 'server_type', 'unknown')})")
+                            
                             # 服务器可能已经初始化过了，这里重新初始化确保状态正确
                             if not hasattr(server_client, 'session') or server_client.session is None:
                                 await server_client.initialize()
@@ -656,7 +658,10 @@ class TraeTaskAgent(TraeAgent):
                             logger.info(f"初始化 MCP 服务器成功: {server_client.name}, 加载了 {len(mcp_tools)} 个工具")
                             
                         except Exception as e:
+                            import traceback
                             logger.error(f"初始化 MCP 服务器失败 {server_client.name}: {e}")
+                            logger.error(f"错误详情: {traceback.format_exc()}")
+                            # 继续处理其他服务器，不要因为一个服务器失败就停止
                             
                 elif isinstance(self.servers, dict):
                     # 如果是配置字典
