@@ -89,28 +89,62 @@ class TraeTaskAgent(TraeAgent):
         self.websocket_manager = websocket_manager
         self.websocket_connection = websocket_connection
         self.current_session_id = session_id
+        # 获取稳健的连接对象
+        self.robust_connection = None
+        if hasattr(websocket_manager, 'session_connections'):
+            self.robust_connection = websocket_manager.session_connections.get(session_id)
+        if not self.robust_connection and hasattr(websocket_manager, 'connections'):
+            # 尝试从用户连接中获取
+            for conn in websocket_manager.connections.values():
+                if conn.websocket == websocket_connection:
+                    self.robust_connection = conn
+                    break
     
     async def _send_step_update(self, step_data: dict):
         """发送步骤更新到前端"""
-        if self.websocket_manager and self.websocket_connection:
-            try:
-                import json
-                from datetime import datetime
+        success = False
+        
+        try:
+            import json
+            from datetime import datetime
+            
+            # 构造实时步骤更新消息
+            update_message = {
+                "type": "step_update",
+                "session_id": self.current_session_id,
+                "step_data": step_data,
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            message_json = json.dumps(update_message, ensure_ascii=False)
+            
+            # 优先使用稳健连接
+            if self.robust_connection:
+                success = await self.robust_connection.send_message(message_json)
+                if success:
+                    print(f"通过稳健连接发送步骤更新: {step_data.get('description', 'unknown')}")
+                else:
+                    print(f"稳健连接发送失败，连接状态: {self.robust_connection.state}")
+            
+            # 如果稳健连接失败，尝试传统方式（向后兼容）
+            if not success and self.websocket_manager and self.websocket_connection:
+                try:
+                    success = await self.websocket_manager.send_personal_message(
+                        message_json, 
+                        self.websocket_connection
+                    )
+                    if success:
+                        print(f"通过传统连接发送步骤更新: {step_data.get('description', 'unknown')}")
+                except Exception as e:
+                    print(f"传统连接发送也失败: {e}")
+            
+            if not success:
+                print(f"所有连接方式都失败，步骤更新丢失: {step_data.get('description', 'unknown')}")
                 
-                # 构造实时步骤更新消息
-                update_message = {
-                    "type": "step_update",
-                    "session_id": self.current_session_id,
-                    "step_data": step_data,
-                    "timestamp": datetime.now().isoformat()
-                }
-                
-                await self.websocket_manager.send_personal_message(
-                    json.dumps(update_message, ensure_ascii=False), 
-                    self.websocket_connection
-                )
-            except Exception as e:
-                print(f"发送步骤更新失败: {e}")
+        except Exception as e:
+            print(f"发送步骤更新时发生异常: {e}")
+            import traceback
+            traceback.print_exc()
     
     async def process_message(self, message: str, session_id: str, **kwargs) -> Dict:
         """
