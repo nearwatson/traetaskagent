@@ -57,7 +57,12 @@ class TraeTaskAgent(TraeAgent):
         # 新增：WebSocket连接和实时反馈相关
         self.websocket_manager = None
         self.websocket_connection = None
+        self.robust_connection = None
         self.step_callback = None
+        
+        # Message caching for connection recovery
+        self.message_cache = []
+        self.max_cache_size = 50
         
         # MCP 工具相关
         self.mcp_tools = []
@@ -87,18 +92,33 @@ class TraeTaskAgent(TraeAgent):
     def set_websocket_callback(self, websocket_manager, websocket_connection, session_id: str):
         """设置WebSocket连接和回调，用于实时反馈"""
         self.websocket_manager = websocket_manager
-        self.websocket_connection = websocket_connection
         self.current_session_id = session_id
-        # 获取稳健的连接对象
-        self.robust_connection = None
-        if hasattr(websocket_manager, 'session_connections'):
-            self.robust_connection = websocket_manager.session_connections.get(session_id)
-        if not self.robust_connection and hasattr(websocket_manager, 'connections'):
-            # 尝试从用户连接中获取
-            for conn in websocket_manager.connections.values():
-                if conn.websocket == websocket_connection:
-                    self.robust_connection = conn
-                    break
+        
+        # 检查websocket_connection是否已经是稳健连接对象
+        # 避免循环导入，使用类型名检查
+        if hasattr(websocket_connection, 'state') and hasattr(websocket_connection, 'websocket'):
+            self.robust_connection = websocket_connection
+            self.websocket_connection = websocket_connection.websocket
+        else:
+            # 传统方式兼容
+            self.websocket_connection = websocket_connection
+            # 获取稳健的连接对象
+            self.robust_connection = None
+            if hasattr(websocket_manager, 'session_connections'):
+                self.robust_connection = websocket_manager.session_connections.get(session_id)
+            if not self.robust_connection and hasattr(websocket_manager, 'connections'):
+                # 尝试从用户连接中获取
+                for conn in websocket_manager.connections.values():
+                    if hasattr(conn, 'websocket') and conn.websocket == websocket_connection:
+                        self.robust_connection = conn
+                        break
+        
+        # 如果建立了有效连接，尝试发送缓存的消息
+        if self.robust_connection and hasattr(self.robust_connection, 'state'):
+            if str(self.robust_connection.state) == "WebSocketState.CONNECTED":
+                # 异步发送缓存消息（不等待完成，避免阻塞）
+                import asyncio
+                asyncio.create_task(self._flush_cached_messages())
     
     async def _send_step_update(self, step_data: dict):
         """发送步骤更新到前端"""
@@ -120,11 +140,28 @@ class TraeTaskAgent(TraeAgent):
             
             # 优先使用稳健连接
             if self.robust_connection:
-                success = await self.robust_connection.send_message(message_json)
-                if success:
-                    print(f"通过稳健连接发送步骤更新: {step_data.get('description', 'unknown')}")
+                # 检查连接状态
+                if hasattr(self.robust_connection, 'state'):
+                    # 检查连接状态（避免循环导入，直接检查状态值）
+                    if str(self.robust_connection.state) == "WebSocketState.CONNECTED":
+                        success = await self.robust_connection.send_message(message_json)
+                        if success:
+                            print(f"通过稳健连接发送步骤更新: {step_data.get('description', 'unknown')}")
+                        else:
+                            print(f"稳健连接发送失败，连接状态: {self.robust_connection.state}")
+                    else:
+                        print(f"稳健连接状态不正确: {self.robust_connection.state}")
+                        # 尝试重新获取连接
+                        if self.websocket_manager and hasattr(self.websocket_manager, 'session_connections'):
+                            new_connection = self.websocket_manager.session_connections.get(self.current_session_id)
+                            if new_connection and hasattr(new_connection, 'state') and str(new_connection.state) == "WebSocketState.CONNECTED":
+                                self.robust_connection = new_connection
+                                success = await self.robust_connection.send_message(message_json)
+                                if success:
+                                    print(f"通过重新获取的连接发送步骤更新: {step_data.get('description', 'unknown')}")
                 else:
-                    print(f"稳健连接发送失败，连接状态: {self.robust_connection.state}")
+                    # 直接尝试发送
+                    success = await self.robust_connection.send_message(message_json)
             
             # 如果稳健连接失败，尝试传统方式（向后兼容）
             if not success and self.websocket_manager and self.websocket_connection:
@@ -139,12 +176,57 @@ class TraeTaskAgent(TraeAgent):
                     print(f"传统连接发送也失败: {e}")
             
             if not success:
-                print(f"所有连接方式都失败，步骤更新丢失: {step_data.get('description', 'unknown')}")
+                print(f"所有连接方式都失败，缓存步骤更新: {step_data.get('description', 'unknown')}")
+                # 将失败的消息缓存起来，等待连接恢复后发送
+                self._cache_message(update_message)
+                from logger import logger
+                logger.warning(f"WebSocket消息发送失败，已缓存 - Session: {self.current_session_id}, Step: {step_data.get('description', 'unknown')}")
                 
         except Exception as e:
             print(f"发送步骤更新时发生异常: {e}")
+            from logger import logger
+            logger.error(f"发送步骤更新异常: {e}")
             import traceback
             traceback.print_exc()
+    
+    def _cache_message(self, message_data: dict):
+        """缓存发送失败的消息"""
+        if len(self.message_cache) >= self.max_cache_size:
+            # 如果缓存满了，移除最旧的消息
+            self.message_cache.pop(0)
+        
+        self.message_cache.append(message_data)
+        print(f"消息已缓存，当前缓存数量: {len(self.message_cache)}")
+    
+    async def _flush_cached_messages(self):
+        """发送缓存的消息"""
+        if not self.message_cache:
+            return
+        
+        import json
+        successful_count = 0
+        failed_messages = []
+        
+        for cached_message in self.message_cache:
+            try:
+                message_json = json.dumps(cached_message, ensure_ascii=False)
+                if self.robust_connection and str(self.robust_connection.state) == "WebSocketState.CONNECTED":
+                    success = await self.robust_connection.send_message(message_json)
+                    if success:
+                        successful_count += 1
+                    else:
+                        failed_messages.append(cached_message)
+                else:
+                    failed_messages.append(cached_message)
+            except Exception as e:
+                print(f"发送缓存消息失败: {e}")
+                failed_messages.append(cached_message)
+        
+        # 更新缓存，保留发送失败的消息
+        self.message_cache = failed_messages
+        
+        if successful_count > 0:
+            print(f"成功发送 {successful_count} 条缓存消息，剩余 {len(self.message_cache)} 条")
     
     async def process_message(self, message: str, session_id: str, **kwargs) -> Dict:
         """
