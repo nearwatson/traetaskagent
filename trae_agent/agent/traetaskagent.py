@@ -143,22 +143,32 @@ class TraeTaskAgent(TraeAgent):
                 # 检查连接状态
                 if hasattr(self.robust_connection, 'state'):
                     # 检查连接状态（避免循环导入，直接检查状态值）
-                    if str(self.robust_connection.state) == "WebSocketState.CONNECTED":
+                    state_value = str(self.robust_connection.state)
+                    is_connected = state_value in ["connected", "WebSocketState.CONNECTED"]
+                    
+                    if is_connected:
                         success = await self.robust_connection.send_message(message_json)
                         if success:
-                            print(f"通过稳健连接发送步骤更新: {step_data.get('description', 'unknown')}")
+                            print(f"✅ 通过稳健连接发送步骤更新: {step_data.get('description', 'unknown')}")
                         else:
-                            print(f"稳健连接发送失败，连接状态: {self.robust_connection.state}")
+                            print(f"❌ 稳健连接发送失败，连接状态: {self.robust_connection.state}")
+                            print(f"   连接用户ID: {getattr(self.robust_connection, 'user_id', 'None')}")
+                            print(f"   WebSocket状态: {getattr(self.robust_connection.websocket, 'client_state', 'Unknown') if hasattr(self.robust_connection, 'websocket') else 'No websocket'}")
                     else:
-                        print(f"稳健连接状态不正确: {self.robust_connection.state}")
+                        print(f"❌ 稳健连接状态不正确: {self.robust_connection.state}")
+                        print(f"   期望状态: 'connected' 或 'WebSocketState.CONNECTED'")
+                        print(f"   连接用户ID: {getattr(self.robust_connection, 'user_id', 'None')}")
                         # 尝试重新获取连接
                         if self.websocket_manager and hasattr(self.websocket_manager, 'session_connections'):
                             new_connection = self.websocket_manager.session_connections.get(self.current_session_id)
-                            if new_connection and hasattr(new_connection, 'state') and str(new_connection.state) == "WebSocketState.CONNECTED":
-                                self.robust_connection = new_connection
-                                success = await self.robust_connection.send_message(message_json)
-                                if success:
-                                    print(f"通过重新获取的连接发送步骤更新: {step_data.get('description', 'unknown')}")
+                            if new_connection and hasattr(new_connection, 'state'):
+                                new_state_value = str(new_connection.state)
+                                new_is_connected = new_state_value in ["connected", "WebSocketState.CONNECTED"]
+                                if new_is_connected:
+                                    self.robust_connection = new_connection
+                                    success = await self.robust_connection.send_message(message_json)
+                                    if success:
+                                        print(f"通过重新获取的连接发送步骤更新: {step_data.get('description', 'unknown')}")
                 else:
                     # 直接尝试发送
                     success = await self.robust_connection.send_message(message_json)
@@ -210,10 +220,15 @@ class TraeTaskAgent(TraeAgent):
         for cached_message in self.message_cache:
             try:
                 message_json = json.dumps(cached_message, ensure_ascii=False)
-                if self.robust_connection and str(self.robust_connection.state) == "WebSocketState.CONNECTED":
-                    success = await self.robust_connection.send_message(message_json)
-                    if success:
-                        successful_count += 1
+                if self.robust_connection and hasattr(self.robust_connection, 'state'):
+                    state_value = str(self.robust_connection.state)
+                    is_connected = state_value in ["connected", "WebSocketState.CONNECTED"]
+                    if is_connected:
+                        success = await self.robust_connection.send_message(message_json)
+                        if success:
+                            successful_count += 1
+                        else:
+                            failed_messages.append(cached_message)
                     else:
                         failed_messages.append(cached_message)
                 else:
