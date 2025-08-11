@@ -243,6 +243,54 @@ class TraeTaskAgent(TraeAgent):
         if successful_count > 0:
             print(f"成功发送 {successful_count} 条缓存消息，剩余 {len(self.message_cache)} 条")
     
+    async def _send_task_finish_signal(self, execution):
+        """发送任务完成信号到前端"""
+        try:
+            import json
+            from datetime import datetime
+            
+            # 构造任务完成信号消息
+            finish_message = {
+                "type": "task_finish",
+                "session_id": self.current_session_id,
+                "task_data": {
+                    "success": execution.success,
+                    "final_result": execution.final_result,
+                    "execution_time": execution.execution_time if hasattr(execution, 'execution_time') else None,
+                    "total_tokens": execution.total_tokens.total_tokens if execution.total_tokens else None,
+                    "step_count": len(execution.steps)
+                },
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            message_json = json.dumps(finish_message, ensure_ascii=False)
+            
+            # 优先使用稳健连接
+            if self.robust_connection:
+                # 检查连接状态
+                if hasattr(self.robust_connection, 'state'):
+                    state_value = str(self.robust_connection.state)
+                    is_connected = state_value in ["connected", "WebSocketState.CONNECTED"]
+                    
+                    if is_connected:
+                        success = await self.robust_connection.send_message(message_json)
+                        if success:
+                            print(f"✅ 任务完成信号已发送到前端")
+                            return
+                
+                # 如果稳健连接失败，缓存消息
+                self._cache_message(finish_message)
+                print("⚠️ 稳健连接不可用，任务完成信号已缓存")
+            else:
+                # 缓存消息以备后续发送
+                self._cache_message(finish_message)
+                print("⚠️ 连接不可用，任务完成信号已缓存")
+                
+        except Exception as e:
+            print(f"❌ 发送任务完成信号失败: {e}")
+            import traceback
+            traceback.print_exc()
+    
     async def process_message(self, message: str, session_id: str, **kwargs) -> Dict:
         """
         Process a message and return structured response compatible with web-backend .
@@ -481,6 +529,9 @@ class TraeTaskAgent(TraeAgent):
                                 "description": f"步骤 {step_number}: 任务成功完成",
                                 "status": "completed"
                             })
+                            
+                            # 发送任务完成信号
+                            await self._send_task_finish_signal(execution)
                             break
                         else:
                             step.state = AgentState.THINKING
