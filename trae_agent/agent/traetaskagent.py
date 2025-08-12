@@ -257,7 +257,7 @@ class TraeTaskAgent(TraeAgent):
                     "success": execution.success,
                     "final_result": execution.final_result,
                     "execution_time": execution.execution_time if hasattr(execution, 'execution_time') else None,
-                    "total_tokens": execution.total_tokens.total_tokens if execution.total_tokens else None,
+                    "total_tokens": execution.total_tokens if execution.total_tokens else None,
                     "step_count": len(execution.steps)
                 },
                 "timestamp": datetime.now().isoformat()
