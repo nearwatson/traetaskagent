@@ -454,6 +454,11 @@ class TraeTaskAgent(TraeAgent):
         start_time = time.time()
         execution = AgentExecution(task=self._task, steps=[])
         
+        # 启动连接保活任务
+        keepalive_task = None
+        if hasattr(self, 'websocket_manager') and self.websocket_manager:
+            keepalive_task = asyncio.create_task(self._keepalive_connection())
+        
         try:
             messages = self._initial_messages
             step_number = 1
@@ -595,13 +600,66 @@ class TraeTaskAgent(TraeAgent):
                 "status": "error"
             })
 
-        execution.execution_time = time.time() - start_time
+            execution.execution_time = time.time() - start_time
 
-        # Display final summary
-        if 'step' in locals():
-            self._update_cli_console(step)
+            # Display final summary
+            if 'step' in locals():
+                self._update_cli_console(step)
 
-        return execution
+            return execution
+        
+        except Exception as e:
+            logger.error(f"Task execution failed: {e}")
+            import traceback
+            traceback.print_exc()
+            
+            execution.final_result = f"Task execution failed: {str(e)}"
+            execution.success = False
+            execution.execution_time = time.time() - start_time
+            return execution
+        finally:
+            # 停止连接保活任务
+            if keepalive_task and not keepalive_task.done():
+                keepalive_task.cancel()
+                try:
+                    await keepalive_task
+                except asyncio.CancelledError:
+                    pass
+    
+    async def _keepalive_connection(self):
+        """在长时间任务执行期间保持WebSocket连接活跃"""
+        try:
+            import json
+            from datetime import datetime
+            
+            while True:
+                await asyncio.sleep(15)  # 每15秒发送一次保活消息
+                
+                if hasattr(self, 'websocket_manager') and hasattr(self, 'websocket_connection') and hasattr(self, 'session_id'):
+                    try:
+                        keepalive_msg = {
+                            "type": "task_keepalive",
+                            "session_id": self.session_id,
+                            "timestamp": datetime.now().isoformat(),
+                            "message": "任务执行中，连接保持活跃..."
+                        }
+                        
+                        # 通过WebSocket发送保活消息
+                        success = await self.websocket_connection.send_message(
+                            json.dumps(keepalive_msg, ensure_ascii=False)
+                        )
+                        
+                        if not success:
+                            logger.warning("连接保活消息发送失败，可能连接已断开")
+                            break
+                            
+                    except Exception as e:
+                        logger.debug(f"发送连接保活消息时出错: {e}")
+                        break
+        except asyncio.CancelledError:
+            logger.debug("连接保活任务被取消")
+        except Exception as e:
+            logger.error(f"连接保活任务出错: {e}")
     
     async def _tool_call_handler_with_feedback(self, tool_calls, step, step_number, llm_response=None):
         """带实时反馈的工具调用处理器"""
