@@ -26,25 +26,45 @@ def load_env():
 class TraeTaskAgent(TraeAgent):
     """TraeTaskAgent - TraeAgent adapted for web backend integration."""
 
-    @staticmethod
-    def _create_default_trae_config() -> Config:
-        """Create default Trae Config."""
+    def _create_default_trae_config(self, user_id: str = None) -> Config:
+        """Create default Trae Config with user-specific API keys."""
         load_env()
         # project_root = Path(__file__).parent.parent.parent.parent.parent.parent
         config_path = "agents/traeag/trae_config.json"
         with open(config_path, 'r') as f:
             trae_config_dict = json.load(f)
+        
+        # 获取用户的API密钥
+        user_api_keys = {}
+        if user_id and hasattr(self, 'db_manager') and self.db_manager:
+            try:
+                # 这里需要异步方法，但在构造函数中不能直接调用
+                # 暂时使用同步方式，后续在initialize方法中更新
+                pass
+            except Exception as e:
+                logger.warning(f"获取用户API密钥失败: {e}")
+        
+        # 更新配置中的API密钥，优先使用用户配置的密钥
         for provider, prov_config in trae_config_dict['model_providers'].items():
             key_name = provider.upper() + '_API_KEY'
             if 'api_key' in prov_config:
-                prov_config['api_key'] = os.getenv(key_name, prov_config['api_key'])
+                # 优先级：用户API密钥 > 环境变量 > 配置文件默认值
+                if user_api_keys.get(key_name):
+                    prov_config['api_key'] = user_api_keys[key_name]
+                    logger.info(f"使用用户配置的 {key_name}")
+                else:
+                    env_key = os.getenv(key_name, prov_config['api_key'])
+                    prov_config['api_key'] = env_key
+                    if env_key != prov_config['api_key']:
+                        logger.info(f"使用环境变量中的 {key_name}")
+        
         return Config(trae_config_dict)
 
-    def __init__(self, servers, llm_client, config, db_manager):
+    def __init__(self, servers, llm_client, config, db_manager, user_id=None):
         """Initialize TraeTaskAgent with server management."""
         # TraeTaskAgent 总是使用自己的专用配置
         # 因为外部的 config 和 llm_client 可能不兼容 TraeAgent 的接口需求
-        trae_config = self._create_default_trae_config()
+        trae_config = self._create_default_trae_config(user_id)
         
         # 调用父类初始化，使用专用配置和 llm_client=None
         super().__init__(trae_config, llm_client=None)
@@ -53,6 +73,7 @@ class TraeTaskAgent(TraeAgent):
         self.servers = servers
         self.db_manager = db_manager
         self.current_session_id = None
+        self.user_id = user_id  # 存储用户ID用于后续获取API密钥
         
         # 新增：WebSocket连接和实时反馈相关
         self.websocket_manager = None
@@ -81,8 +102,57 @@ class TraeTaskAgent(TraeAgent):
     
     async def initialize(self):
         """Initialize the agent and MCP servers."""
+        # Load user API keys and update configuration
+        if self.user_id:
+            await self._load_user_api_keys()
+        
         # Initialize MCP servers if available
         await self._initialize_mcp_servers()
+    
+    async def _load_user_api_keys(self):
+        """Load user API keys and update LLM client configuration."""
+        try:
+            if not self.user_id:
+                logger.debug("用户ID为空，跳过API密钥加载")
+                return
+                
+            if not self.db_manager:
+                logger.warning("数据库管理器不可用，无法加载用户API密钥")
+                return
+            
+            # 导入API密钥管理器
+            from api_key_manager import APIKeyManager
+            
+            try:
+                api_key_manager = APIKeyManager(self.db_manager)
+                
+                # 获取用户的API密钥
+                user_api_keys = await api_key_manager.get_user_api_keys_for_agent(self.user_id)
+                
+                if user_api_keys:
+                    logger.info(f"为用户 {self.user_id} 加载了 {len(user_api_keys)} 个API密钥")
+                    
+                    # 更新LLM客户端的配置
+                    if hasattr(self._llm_client, '_update_api_keys'):
+                        # 如果LLM客户端支持动态更新API密钥
+                        self._llm_client._update_api_keys(user_api_keys)
+                    else:
+                        # 否则，临时设置环境变量（在进程级别生效）
+                        import os
+                        for key, value in user_api_keys.items():
+                            os.environ[key] = value
+                            logger.debug(f"设置API密钥环境变量: {key}")
+                else:
+                    logger.info(f"用户 {self.user_id} 未配置任何API密钥，使用默认配置")
+                    
+            except Exception as e:
+                logger.warning(f"初始化API密钥管理器失败: {e}")
+                logger.info("将使用默认配置继续运行")
+                
+        except Exception as e:
+            logger.warning(f"加载用户API密钥失败: {e}")
+            logger.info("将使用默认配置继续运行")
+            # 不抛出异常，使用默认配置继续运行
     
     async def cleanup_servers(self):
         """Cleanup resources."""
@@ -292,6 +362,8 @@ class TraeTaskAgent(TraeAgent):
             traceback.print_exc()
     
     async def process_message(self, message: str, session_id: str, **kwargs) -> Dict:
+        # 确保设置当前session_id
+        self.current_session_id = session_id
         """
         Process a message and return structured response compatible with web-backend .
         
