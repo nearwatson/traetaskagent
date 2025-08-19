@@ -132,6 +132,9 @@ class TraeTaskAgent(TraeAgent):
                 if user_api_keys:
                     logger.info(f"为用户 {self.user_id} 加载了 {len(user_api_keys)} 个API密钥")
                     
+                    # 更新Trae配置中的API密钥
+                    self._update_trae_config_with_user_keys(user_api_keys)
+                    
                     # 更新LLM客户端的配置
                     if hasattr(self._llm_client, '_update_api_keys'):
                         # 如果LLM客户端支持动态更新API密钥
@@ -143,16 +146,53 @@ class TraeTaskAgent(TraeAgent):
                             os.environ[key] = value
                             logger.debug(f"设置API密钥环境变量: {key}")
                 else:
-                    logger.info(f"用户 {self.user_id} 未配置任何API密钥，使用默认配置")
+                    logger.warning(f"用户 {self.user_id} 未配置任何API密钥")
+                    raise ValueError(
+                        f"用户 {self.user_id} 未配置任何LLM API密钥。"
+                        "请在用户设置中配置至少一个LLM提供商的API密钥（如OpenAI、Anthropic等）。"
+                    )
                     
             except Exception as e:
-                logger.warning(f"初始化API密钥管理器失败: {e}")
-                logger.info("将使用默认配置继续运行")
+                logger.error(f"初始化API密钥管理器失败: {e}")
+                raise ValueError(f"无法加载用户API密钥配置: {e}")
                 
         except Exception as e:
-            logger.warning(f"加载用户API密钥失败: {e}")
-            logger.info("将使用默认配置继续运行")
-            # 不抛出异常，使用默认配置继续运行
+            logger.error(f"加载用户API密钥失败: {e}")
+            raise  # 抛出异常，因为没有API密钥无法正常工作
+    
+    def _update_trae_config_with_user_keys(self, user_api_keys: dict):
+        """使用用户API密钥更新Trae配置"""
+        try:
+            if not hasattr(self, '_config') or not self._config:
+                logger.warning("Trae配置不可用，无法更新API密钥")
+                return
+            
+            # 获取配置中的model_providers
+            config_dict = self._config.config if hasattr(self._config, 'config') else {}
+            model_providers = config_dict.get('model_providers', {})
+            
+            updated_count = 0
+            for env_key, api_key in user_api_keys.items():
+                if env_key.endswith('_API_KEY'):
+                    # 提取提供商名称
+                    provider = env_key.replace('_API_KEY', '').lower()
+                    
+                    # 更新配置中对应提供商的API密钥
+                    if provider in model_providers:
+                        model_providers[provider]['api_key'] = api_key
+                        updated_count += 1
+                        logger.debug(f"更新 {provider} 的API密钥配置")
+                elif env_key.endswith('_BASE_URL'):
+                    # 处理base_url
+                    provider = env_key.replace('_BASE_URL', '').lower()
+                    if provider in model_providers:
+                        model_providers[provider]['base_url'] = user_api_keys[env_key]
+                        logger.debug(f"更新 {provider} 的base_url配置")
+            
+            logger.info(f"成功更新了 {updated_count} 个提供商的API密钥配置")
+            
+        except Exception as e:
+            logger.error(f"更新Trae配置中的API密钥失败: {e}")
     
     async def cleanup_servers(self):
         """Cleanup resources."""
