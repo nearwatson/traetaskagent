@@ -359,21 +359,42 @@ class TraeTaskAgent(TraeAgent):
             import json
             from datetime import datetime
             
+            # 安全地获取 total_tokens 信息，确保可序列化
+            total_tokens_data = None
+            if hasattr(execution, 'total_tokens') and execution.total_tokens:
+                if hasattr(execution.total_tokens, 'input_tokens') and hasattr(execution.total_tokens, 'output_tokens'):
+                    total_tokens_data = {
+                        "input_tokens": execution.total_tokens.input_tokens or 0,
+                        "output_tokens": execution.total_tokens.output_tokens or 0,
+                        "total": (execution.total_tokens.input_tokens or 0) + (execution.total_tokens.output_tokens or 0)
+                    }
+                else:
+                    # 如果 total_tokens 不是期望的对象，转换为字符串
+                    total_tokens_data = str(execution.total_tokens)
+            
+            # 安全地获取 steps 信息
+            step_count = 0
+            if hasattr(execution, 'steps') and execution.steps:
+                step_count = len(execution.steps)
+            
             # 构造任务完成信号消息
             finish_message = {
                 "type": "task_finish",
                 "session_id": self.current_session_id,
                 "task_data": {
-                    "success": execution.success,
-                    "final_result": execution.final_result,
-                    "execution_time": execution.execution_time if hasattr(execution, 'execution_time') else None,
-                    "total_tokens": execution.total_tokens if execution.total_tokens else None,
-                    "step_count": len(execution.steps)
+                    "success": getattr(execution, 'success', False),
+                    "final_result": getattr(execution, 'final_result', '任务执行完成'),
+                    "execution_time": getattr(execution, 'execution_time', 0),
+                    "total_tokens": total_tokens_data,
+                    "step_count": step_count
                 },
                 "timestamp": datetime.now().isoformat()
             }
             
-            message_json = json.dumps(finish_message, ensure_ascii=False)
+            # 使用通用序列化函数确保数据可序列化
+            from utility.common_func import ensure_serializable
+            serializable_message = ensure_serializable(finish_message)
+            message_json = json.dumps(serializable_message, ensure_ascii=False)
             
             # 优先使用稳健连接
             if self.robust_connection:
@@ -564,7 +585,10 @@ class TraeTaskAgent(TraeAgent):
         from ..utils.llm_basics import LLMMessage
         
         start_time = time.time()
-        execution = AgentExecution(task=self._task, steps=[])
+        execution = AgentExecution(task=getattr(self, '_task', 'Unknown task'), steps=[])
+        execution.success = False  # 初始化为失败状态
+        execution.final_result = ""  # 初始化结果
+        execution.execution_time = 0  # 初始化执行时间
         
         # 启动连接保活任务
         keepalive_task = None
@@ -702,6 +726,7 @@ class TraeTaskAgent(TraeAgent):
 
         except Exception as e:
             execution.final_result = f"Agent execution failed: {str(e)}"
+            execution.success = False
             
             # 发送失败状态更新
             await self._send_step_update({
@@ -712,24 +737,18 @@ class TraeTaskAgent(TraeAgent):
                 "status": "error"
             })
 
-            execution.execution_time = time.time() - start_time
-
-            # Display final summary
-            if 'step' in locals():
-                self._update_cli_console(step)
-
-            return execution
-        
-        except Exception as e:
             logger.error(f"Task execution failed: {e}")
             import traceback
             traceback.print_exc()
-            
-            execution.final_result = f"Task execution failed: {str(e)}"
-            execution.success = False
-            execution.execution_time = time.time() - start_time
-            return execution
+
         finally:
+            # 确保总是设置执行时间
+            execution.execution_time = time.time() - start_time
+            
+            # Display final summary
+            if 'step' in locals():
+                self._update_cli_console(step)
+                
             # 停止连接保活任务
             if keepalive_task and not keepalive_task.done():
                 keepalive_task.cancel()
@@ -737,6 +756,8 @@ class TraeTaskAgent(TraeAgent):
                     await keepalive_task
                 except asyncio.CancelledError:
                     pass
+        
+        return execution
     
     async def _keepalive_connection(self):
         """在长时间任务执行期间保持WebSocket连接活跃"""
@@ -895,7 +916,10 @@ class TraeTaskAgent(TraeAgent):
         """Convert TraeAgent execution result to web backend response format."""
         steps = []
         
-        for i, step in enumerate(execution.steps, 1):
+        # 安全地获取 steps，如果不存在则使用空列表
+        execution_steps = getattr(execution, 'steps', [])
+        
+        for i, step in enumerate(execution_steps, 1):
             # Map agent states to frontend-compatible types
             state_mapping = {
                 "thinking": "thinking",
@@ -945,8 +969,8 @@ class TraeTaskAgent(TraeAgent):
             steps.append(step_data)
         
         # Determine response type
-        response_type = "error_response" if not execution.success else "complete_response"
-        if execution.success and any(step.tool_calls for step in execution.steps):
+        response_type = "error_response" if not getattr(execution, 'success', False) else "complete_response"
+        if getattr(execution, 'success', False) and any(getattr(step, 'tool_calls', []) for step in execution_steps):
             response_type = "tool_response"
         
         # Check for patch generation
@@ -959,16 +983,25 @@ class TraeTaskAgent(TraeAgent):
             except Exception:
                 pass
         
+        # 安全地获取 token 信息
+        input_tokens = 0
+        output_tokens = 0
+        total_tokens = getattr(execution, 'total_tokens', None)
+        if total_tokens and hasattr(total_tokens, 'input_tokens') and hasattr(total_tokens, 'output_tokens'):
+            input_tokens = total_tokens.input_tokens or 0
+            output_tokens = total_tokens.output_tokens or 0
+        
         response = {
             "type": response_type,
             "steps": steps,
-            "final_message": execution.final_result or "任务执行完成",
-            "has_tool_calls": any(step.tool_calls for step in execution.steps),
+            "final_message": getattr(execution, 'final_result', None) or "任务执行完成",
+            "has_tool_calls": any(getattr(step, 'tool_calls', []) for step in execution_steps),
             "waiting_for_approval": False,  # TraeAgent 不需要工具确认
             "execution_time": getattr(execution, 'execution_time', 0),
-            "success": execution.success,
-            "input_tokens": execution.total_tokens.input_tokens if execution.total_tokens.input_tokens else 0,
-            "output_tokens": execution.total_tokens.output_tokens if execution.total_tokens.output_tokens else 0,
+            "success": getattr(execution, 'success', False),
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": input_tokens + output_tokens,
             "trajectory_file": trajectory_path,
             "patch_available": patch_available
         }
