@@ -638,11 +638,65 @@ class TraeTaskAgent(TraeAgent):
                     step.state = AgentState.THINKING
                     self._update_cli_console(step)
 
-                    # Get LLM response
-                    llm_response = self._llm_client.chat(
-                        messages, self._model_parameters, self._tools
+                    # 在LLM调用前检查中断标志
+                    if hasattr(self, 'current_session_id') and self.current_session_id:
+                        interrupt_flag = self.db_manager.get_session_interrupt_flag(self.current_session_id)
+                        if interrupt_flag:
+                            logger.info(f"检测到session {self.current_session_id} 的中断标志，停止任务执行")
+                            self.db_manager.clear_session_interrupt_flag(self.current_session_id)
+                            await self._send_step_update({
+                                "step": step_number,
+                                "type": "interrupted",
+                                "content": "任务已被用户中断",
+                                "description": f"步骤 {step_number}: 任务执行被用户中断",
+                                "status": "interrupted"
+                            })
+                            execution.final_result = f"Task interrupted by user at step {step_number}"
+                            execution.success = False
+                            break
+
+                    # Get LLM response with cancellation support
+                    llm_response = await self._llm_client.chat_with_cancellation(
+                        messages, self._model_parameters, self._tools, self
+                    )
+
+                step = AgentStep(step_number=step_number, state=AgentState.THINKING)
+
+                try:
+                    # 发送"思考中"状态更新
+                    await self._send_step_update({
+                        "step": step_number,
+                        "type": "thinking",
+                        "content": f"步骤 {step_number}: 正在思考...",
+                        "description": f"步骤 {step_number}: AI正在分析和思考",
+                        "status": "in_progress"
+                    })
+
+                    step.state = AgentState.THINKING
+                    self._update_cli_console(step)
+
+                    # Get LLM response with cancellation support
+                    llm_response = await self._llm_client.chat_with_cancellation(
+                        messages, self._model_parameters, self._tools, self
                     )
                     step.llm_response = llm_response
+
+                    # 再次检查中断标志（在LLM调用后）
+                    if hasattr(self, 'current_session_id') and self.current_session_id:
+                        interrupt_flag = self.db_manager.get_session_interrupt_flag(self.current_session_id)
+                        if interrupt_flag:
+                            logger.info(f"检测到session {self.current_session_id} 的中断标志，停止任务执行")
+                            self.db_manager.clear_session_interrupt_flag(self.current_session_id)
+                            await self._send_step_update({
+                                "step": step_number,
+                                "type": "interrupted",
+                                "content": "任务已被用户中断",
+                                "description": f"步骤 {step_number}: 任务执行被用户中断",
+                                "status": "interrupted"
+                            })
+                            execution.final_result = f"Task interrupted by user at step {step_number}"
+                            execution.success = False
+                            break
 
                     # 发送LLM响应更新
                     await self._send_step_update({
@@ -825,10 +879,18 @@ class TraeTaskAgent(TraeAgent):
         step.tool_calls = tool_calls
         self._update_cli_console(step)
 
+        # 在工具调用前检查中断标志
+        if hasattr(self, 'current_session_id') and self.current_session_id:
+            interrupt_flag = self.db_manager.get_session_interrupt_flag(self.current_session_id)
+            if interrupt_flag:
+                logger.info(f"检测到session {self.current_session_id} 的中断标志，停止任务执行")
+                self.db_manager.clear_session_interrupt_flag(self.current_session_id)
+                return messages  # 直接返回，不执行工具调用
+
         if self._model_parameters.parallel_tool_calls:
-            tool_results = await self._tool_caller.parallel_tool_call(tool_calls)
+            tool_results = await self._tool_caller.parallel_tool_call(tool_calls, self)
         else:
-            tool_results = await self._tool_caller.sequential_tool_call(tool_calls)
+            tool_results = await self._tool_caller.sequential_tool_call(tool_calls, self)
         
         step.tool_results = tool_results
         self._update_cli_console(step)

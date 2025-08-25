@@ -192,8 +192,20 @@ class ToolExecutor:
             self._tool_map = {self._normalize_name(tool.name): tool for tool in self._tools}
         return self._tool_map
 
-    async def execute_tool_call(self, tool_call: ToolCall) -> ToolResult:
-        """Execute a tool call."""
+    async def execute_tool_call(self, tool_call: ToolCall, agent_instance=None) -> ToolResult:
+        """Execute a tool call with cancellation support."""
+        # 检查中断标志
+        if agent_instance and hasattr(agent_instance, 'current_session_id') and hasattr(agent_instance, 'db_manager'):
+            interrupt_flag = agent_instance.db_manager.get_session_interrupt_flag(agent_instance.current_session_id)
+            if interrupt_flag:
+                return ToolResult(
+                    name=tool_call.name,
+                    success=False,
+                    error="Task interrupted by user",
+                    call_id=tool_call.call_id,
+                    id=tool_call.id,
+                )
+
         normalized_name = self._normalize_name(tool_call.name)
         if normalized_name not in self.tools:
             return ToolResult(
@@ -207,6 +219,18 @@ class ToolExecutor:
         tool = self.tools[normalized_name]
 
         try:
+            # 再次检查中断标志（在工具执行前）
+            if agent_instance and hasattr(agent_instance, 'current_session_id') and hasattr(agent_instance, 'db_manager'):
+                interrupt_flag = agent_instance.db_manager.get_session_interrupt_flag(agent_instance.current_session_id)
+                if interrupt_flag:
+                    return ToolResult(
+                        name=tool_call.name,
+                        success=False,
+                        error="Task interrupted by user",
+                        call_id=tool_call.call_id,
+                        id=tool_call.id,
+                    )
+
             tool_exec_result = await tool.execute(tool_call.arguments)
             return ToolResult(
                 name=tool_call.name,
@@ -225,10 +249,28 @@ class ToolExecutor:
                 id=tool_call.id,
             )
 
-    async def parallel_tool_call(self, tool_calls: list[ToolCall]) -> list[ToolResult]:
-        """Execute tool calls in parallel"""
-        return await asyncio.gather(*[self.execute_tool_call(call) for call in tool_calls])
+    async def parallel_tool_call(self, tool_calls: list[ToolCall], agent_instance=None) -> list[ToolResult]:
+        """Execute tool calls in parallel with cancellation support"""
+        tasks = [self.execute_tool_call(call, agent_instance) for call in tool_calls]
+        return await asyncio.gather(*tasks)
 
-    async def sequential_tool_call(self, tool_calls: list[ToolCall]) -> list[ToolResult]:
-        """Execute tool calls in sequential"""
-        return [await self.execute_tool_call(call) for call in tool_calls]
+    async def sequential_tool_call(self, tool_calls: list[ToolCall], agent_instance=None) -> list[ToolResult]:
+        """Execute tool calls in sequential with cancellation support"""
+        results = []
+        for call in tool_calls:
+            # 检查中断标志
+            if agent_instance and hasattr(agent_instance, 'current_session_id') and hasattr(agent_instance, 'db_manager'):
+                interrupt_flag = agent_instance.db_manager.get_session_interrupt_flag(agent_instance.current_session_id)
+                if interrupt_flag:
+                    # 添加一个中断结果并停止执行
+                    results.append(ToolResult(
+                        name="interrupted",
+                        success=False,
+                        error="Task interrupted by user",
+                        call_id="interrupt",
+                        id="interrupt",
+                    ))
+                    break
+            result = await self.execute_tool_call(call, agent_instance)
+            results.append(result)
+        return results

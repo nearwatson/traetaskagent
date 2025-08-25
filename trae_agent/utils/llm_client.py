@@ -3,6 +3,8 @@
 
 """LLM Client wrapper for OpenAI, Anthropic, Azure, and OpenRouter APIs."""
 
+import asyncio
+
 from enum import Enum
 
 from ..tools.base import Tool
@@ -94,6 +96,33 @@ class LLMClient:
     ) -> LLMResponse:
         """Send chat messages to the LLM."""
         return self.client.chat(messages, model_parameters, tools, reuse_history)
+
+    async def chat_with_cancellation(
+        self,
+        messages: list[LLMMessage],
+        model_parameters: ModelParameters,
+        tools: list[Tool] | None = None,
+        agent_instance=None,
+        reuse_history: bool = True,
+    ) -> LLMResponse:
+        """Send chat messages to the LLM with cancellation support."""
+        # 检查agent_instance是否提供了中断检查方法
+        if agent_instance and hasattr(agent_instance, 'current_session_id') and hasattr(agent_instance, 'db_manager'):
+            # 在调用前检查中断标志
+            interrupt_flag = agent_instance.db_manager.get_session_interrupt_flag(agent_instance.current_session_id)
+            if interrupt_flag:
+                raise asyncio.CancelledError("Task interrupted by user")
+        
+        # 调用原始chat方法
+        response = self.client.chat(messages, model_parameters, tools, reuse_history)
+        
+        # 在调用后检查中断标志
+        if agent_instance and hasattr(agent_instance, 'current_session_id') and hasattr(agent_instance, 'db_manager'):
+            interrupt_flag = agent_instance.db_manager.get_session_interrupt_flag(agent_instance.current_session_id)
+            if interrupt_flag:
+                raise asyncio.CancelledError("Task interrupted by user")
+                
+        return response
 
     def supports_tool_calling(self, model_parameters: ModelParameters) -> bool:
         """Check if the current client supports tool calling."""
