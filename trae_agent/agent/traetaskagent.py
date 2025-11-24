@@ -625,42 +625,42 @@ class TraeTaskAgent(TraeAgent):
 
                 step = AgentStep(step_number=step_number, state=AgentState.THINKING)
 
-                try:
-                    # 发送"思考中"状态更新
-                    await self._send_step_update({
-                        "step": step_number,
-                        "type": "thinking",
-                        "content": f"步骤 {step_number}: 正在思考...",
-                        "description": f"步骤 {step_number}: AI正在分析和思考",
-                        "status": "in_progress"
-                    })
+                # try:
+                #     # 发送"思考中"状态更新
+                #     await self._send_step_update({
+                #         "step": step_number,
+                #         "type": "thinking",
+                #         "content": f"步骤 {step_number}: 正在思考...",
+                #         "description": f"步骤 {step_number}: AI正在分析和思考",
+                #         "status": "in_progress"
+                #     })
 
-                    step.state = AgentState.THINKING
-                    self._update_cli_console(step)
+                #     step.state = AgentState.THINKING
+                #     self._update_cli_console(step)
 
-                    # 在LLM调用前检查中断标志
-                    if hasattr(self, 'current_session_id') and self.current_session_id:
-                        interrupt_flag = self.db_manager.get_session_interrupt_flag(self.current_session_id)
-                        if interrupt_flag:
-                            logger.info(f"检测到session {self.current_session_id} 的中断标志，停止任务执行")
-                            self.db_manager.clear_session_interrupt_flag(self.current_session_id)
-                            await self._send_step_update({
-                                "step": step_number,
-                                "type": "interrupted",
-                                "content": "任务已被用户中断",
-                                "description": f"步骤 {step_number}: 任务执行被用户中断",
-                                "status": "interrupted"
-                            })
-                            execution.final_result = f"Task interrupted by user at step {step_number}"
-                            execution.success = False
-                            break
+                #     # 在LLM调用前检查中断标志
+                #     if hasattr(self, 'current_session_id') and self.current_session_id:
+                #         interrupt_flag = self.db_manager.get_session_interrupt_flag(self.current_session_id)
+                #         if interrupt_flag:
+                #             logger.info(f"检测到session {self.current_session_id} 的中断标志，停止任务执行")
+                #             self.db_manager.clear_session_interrupt_flag(self.current_session_id)
+                #             await self._send_step_update({
+                #                 "step": step_number,
+                #                 "type": "interrupted",
+                #                 "content": "任务已被用户中断",
+                #                 "description": f"步骤 {step_number}: 任务执行被用户中断",
+                #                 "status": "interrupted"
+                #             })
+                #             execution.final_result = f"Task interrupted by user at step {step_number}"
+                #             execution.success = False
+                #             break
 
-                    # Get LLM response with cancellation support
-                    llm_response = await self._llm_client.chat_with_cancellation(
-                        messages, self._model_parameters, self._tools, self
-                    )
+                #     # Get LLM response with cancellation support
+                #     llm_response = await self._llm_client.chat_with_cancellation(
+                #         messages, self._model_parameters, self._tools, self
+                #     )
 
-                step = AgentStep(step_number=step_number, state=AgentState.THINKING)
+                # step = AgentStep(step_number=step_number, state=AgentState.THINKING)
 
                 try:
                     # 发送"思考中"状态更新
