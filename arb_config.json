@@ -1,0 +1,45 @@
+{
+  "default_provider": "openrouter",
+  "max_iterations": 10,
+  "max_steps": 32,
+  "model_providers": {
+    "openrouter": {
+      "api_key": null,
+      "base_url": "https://openrouter.ai/api/v1",
+      "model": "anthropic/claude-sonnet-4",
+      "max_tokens": 64000,
+      "temperature": 0.7,
+      "top_p": 1,
+      "top_k": 0,
+      "max_retries": 10,
+      "parallel_tool_calls": false
+    },
+    "anthropic": {
+      "api_key": null,
+      "base_url": "https://api.anthropic.com",
+      "model": "claude-sonnet-4-20250514",
+      "max_tokens": 4096,
+      "temperature": 0.7,
+      "top_p": 1,
+      "top_k": 0,
+      "max_retries": 10,
+      "parallel_tool_calls": false
+    },
+    "openai": {
+      "api_key": null,
+      "base_url": "https://api.openai.com/v1",
+      "model": "gpt-4o",
+      "max_tokens": 4096,
+      "temperature": 0.7,
+      "top_p": 1,
+      "max_retries": 10,
+      "parallel_tool_calls": false
+    }
+  },
+  "analysis_config": {
+    "enable_deep_analysis": true,
+    "enable_multi_source_retrieval": true,
+    "enable_reasoning": true,
+    "max_retrieval_depth": 3
+  }
+}

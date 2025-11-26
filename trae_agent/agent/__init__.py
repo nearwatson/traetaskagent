@@ -5,5 +5,6 @@
 
 from .base import Agent
 from .trae_agent import TraeAgent
+from .arb import ArbAgent
 
-__all__ = ["Agent", "TraeAgent"]
+__all__ = ["Agent", "TraeAgent", "ArbAgent"]
